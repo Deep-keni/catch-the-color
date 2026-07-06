@@ -16,6 +16,9 @@ let startTime = 0;
 let spawnTimeout = null;
 let timerInterval = null;
 
+// Target Generation Tracking to prevent race conditions
+let targetGeneration = 0;
+
 // Metrics for Reaction Time
 let totalReactionTime = 0; // Sum of reaction times in ms
 let correctTaps = 0; // Number of correct taps
@@ -40,6 +43,7 @@ function startGame() {
     score = 0;
     correctTaps = 0;
     totalReactionTime = 0;
+    targetGeneration = 0;
     gameActive = true;
     startTime = Date.now();
     updateScore(0);
@@ -82,6 +86,7 @@ function triggerNextSpawn() {
 // 4. Game Logic Functions
 
 function pickNewTarget() {
+    targetGeneration++;
     const randomIndex = Math.floor(Math.random() * colors.length);
     currentTarget = colors[randomIndex];
     
@@ -101,27 +106,59 @@ function spawnCircle() {
     circle.style.backgroundColor = randomColor.hex;
     circle.style.boxShadow = `0 0 20px ${randomColor.hex}`;
     
-    // Position parameters: ensure circle (80px) spawns fully in the screen,
-    // and avoids the header area (top 110px)
     const circleSize = 80;
     const headerHeight = 110;
-    const maxX = window.innerWidth - circleSize - 20;
-    const maxY = window.innerHeight - circleSize - 20;
     
-    const x = Math.random() * Math.max(10, maxX) + 10;
-    const y = Math.random() * Math.max(headerHeight, maxY - headerHeight) + headerHeight;
+    // Avoid overlap: generate random positions and check against existing circles
+    const existingCircles = document.querySelectorAll('.circle');
+    let x = 0;
+    let y = 0;
+    let attempts = 0;
+    let overlap = false;
+    
+    do {
+        overlap = false;
+        const maxX = window.innerWidth - circleSize - 20;
+        const maxY = window.innerHeight - circleSize - 20;
+        x = Math.random() * Math.max(10, maxX) + 10;
+        y = Math.random() * Math.max(headerHeight, maxY - headerHeight) + headerHeight;
+        
+        for (let other of existingCircles) {
+            const ox = parseFloat(other.style.left);
+            const oy = parseFloat(other.style.top);
+            
+            const dx = x - ox;
+            const dy = y - oy;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < circleSize) {
+                overlap = true;
+                break;
+            }
+        }
+        attempts++;
+    } while (overlap && attempts < 15);
     
     circle.style.left = `${x}px`;
     circle.style.top = `${y}px`;
     
-    // Save target info and timestamp at spawn time
+    // Save metadata on dataset to ensure absolute correctness and avoid closure bugs
     const spawnTargetName = currentTarget.name;
+    const spawnedGen = targetGeneration;
     const spawnTime = Date.now();
+    const isTargetAtSpawn = (randomColor.name === spawnTargetName);
+    
+    circle.dataset.color = randomColor.name;
+    circle.dataset.spawnTime = spawnTime;
+    circle.dataset.generation = spawnedGen;
+    circle.dataset.isTargetAtSpawn = isTargetAtSpawn ? "true" : "false";
     
     // Handle Click
     circle.onclick = (e) => {
         e.stopPropagation();
-        handleCircleClick(randomColor, circle, spawnTime);
+        const clickedColorName = circle.dataset.color;
+        const circleSpawnTime = parseInt(circle.dataset.spawnTime, 10);
+        handleCircleClick(clickedColorName, circle, circleSpawnTime);
     };
     
     gameArea.appendChild(circle);
@@ -133,8 +170,13 @@ function spawnCircle() {
     // Auto-remove after calculated lifetime (Missed)
     setTimeout(() => {
         if (circle.parentElement && gameActive) {
+            const currentGen = targetGeneration;
+            const wasTarget = (circle.dataset.isTargetAtSpawn === "true");
+            const circleGen = parseInt(circle.dataset.generation, 10);
+            
             // End game ONLY if the circle matched target at spawn, and target hasn't changed since
-            if (randomColor.name === spawnTargetName && currentTarget.name === spawnTargetName) {
+            if (wasTarget && circleGen === currentGen) {
+                console.log(`[DEBUG] Game Over Check - Missed target circle of color: ${circle.dataset.color}, Current Target Color: ${currentTarget.name}`);
                 endGame('Missed the target color!');
             } else {
                 // Animate fadeOut for non-target circles that naturally expire
@@ -150,10 +192,10 @@ function spawnCircle() {
     }, lifetime);
 }
 
-function handleCircleClick(clickedColor, element, spawnTime) {
+function handleCircleClick(clickedColorName, element, spawnTime) {
     if (!gameActive) return;
     
-    if (clickedColor.name === currentTarget.name) {
+    if (clickedColorName === currentTarget.name) {
         // Correct Hit!
         const tapTime = Date.now();
         const reaction = tapTime - spawnTime;
@@ -175,6 +217,7 @@ function handleCircleClick(clickedColor, element, spawnTime) {
         pickNewTarget();
     } else {
         // Wrong Color!
+        console.log(`[DEBUG] Game Over Check - Tapped Color: ${clickedColorName}, Current Target Color: ${currentTarget.name}`);
         endGame('Wrong color tapped!');
     }
 }
