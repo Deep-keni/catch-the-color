@@ -176,7 +176,6 @@ function spawnCircle() {
             
             // End game ONLY if the circle matched target at spawn, and target hasn't changed since
             if (wasTarget && circleGen === currentGen) {
-                console.log(`[DEBUG] Game Over Check - Missed target circle of color: ${circle.dataset.color}, Current Target Color: ${currentTarget.name}`);
                 endGame('Missed the target color!');
             } else {
                 // Animate fadeOut for non-target circles that naturally expire
@@ -217,7 +216,6 @@ function handleCircleClick(clickedColorName, element, spawnTime) {
         pickNewTarget();
     } else {
         // Wrong Color!
-        console.log(`[DEBUG] Game Over Check - Tapped Color: ${clickedColorName}, Current Target Color: ${currentTarget.name}`);
         endGame('Wrong color tapped!');
     }
 }
