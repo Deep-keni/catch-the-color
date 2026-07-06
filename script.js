@@ -16,9 +16,6 @@ let startTime = 0;
 let spawnTimeout = null;
 let timerInterval = null;
 
-// Target Generation Tracking to prevent race conditions
-let targetGeneration = 0;
-
 // Metrics for Reaction Time
 let totalReactionTime = 0; // Sum of reaction times in ms
 let correctTaps = 0; // Number of correct taps
@@ -43,7 +40,6 @@ function startGame() {
     score = 0;
     correctTaps = 0;
     totalReactionTime = 0;
-    targetGeneration = 0;
     gameActive = true;
     startTime = Date.now();
     updateScore(0);
@@ -65,28 +61,47 @@ function startGame() {
     triggerNextSpawn();
 }
 
+// Progressive Difficulty Logic
+function getDifficultySettings(currentScore) {
+    if (currentScore <= 10) {
+        return {
+            spawnInterval: 1200,      // Normal speed
+            visibleDuration: 1000     // Normal lifetime
+        };
+    } else if (currentScore <= 15) {
+        return {
+            spawnInterval: 1000,      // ~17% faster spawn
+            visibleDuration: 850      // 15% shorter lifetime
+        };
+    } else if (currentScore <= 25) {
+        return {
+            spawnInterval: 750,       // ~37% faster spawn
+            visibleDuration: 600      // 40% shorter lifetime
+        };
+    } else {
+        return {
+            spawnInterval: 480,       // 60% faster spawn
+            visibleDuration: 400      // 60% shorter lifetime
+        };
+    }
+}
+
 function triggerNextSpawn() {
     if (!gameActive) return;
     
-    // Difficulty Scaling for Spawning Delay:
-    // Base delay starts at 1000ms and drops by 25ms per point (minimum 400ms)
-    // Random range starts at 500ms and drops by 15ms per point (minimum 200ms)
-    const baseSpawnDelay = Math.max(400, 1000 - score * 25);
-    const randomSpawnRange = Math.max(200, 500 - score * 15);
-    const delay = Math.random() * randomSpawnRange + baseSpawnDelay;
+    const settings = getDifficultySettings(score);
     
     spawnTimeout = setTimeout(() => {
         if (gameActive) {
             spawnCircle();
             triggerNextSpawn();
         }
-    }, delay);
+    }, settings.spawnInterval);
 }
 
 // 4. Game Logic Functions
 
 function pickNewTarget() {
-    targetGeneration++;
     const randomIndex = Math.floor(Math.random() * colors.length);
     currentTarget = colors[randomIndex];
     
@@ -142,60 +157,58 @@ function spawnCircle() {
     circle.style.left = `${x}px`;
     circle.style.top = `${y}px`;
     
-    // Save metadata on dataset to ensure absolute correctness and avoid closure bugs
-    const spawnTargetName = currentTarget.name;
-    const spawnedGen = targetGeneration;
-    const spawnTime = Date.now();
-    const isTargetAtSpawn = (randomColor.name === spawnTargetName);
-    
+    // Store fixed color property and creation timestamp on dataset attributes
     circle.dataset.color = randomColor.name;
-    circle.dataset.spawnTime = spawnTime;
-    circle.dataset.generation = spawnedGen;
-    circle.dataset.isTargetAtSpawn = isTargetAtSpawn ? "true" : "false";
+    circle.dataset.spawnTime = Date.now();
     
     // Handle Click
     circle.onclick = (e) => {
         e.stopPropagation();
-        const clickedColorName = circle.dataset.color;
-        const circleSpawnTime = parseInt(circle.dataset.spawnTime, 10);
-        handleCircleClick(clickedColorName, circle, circleSpawnTime);
+        handleCircleClick(circle);
     };
     
     gameArea.appendChild(circle);
     
-    // Difficulty Scaling for Circle Lifetime (Visible Time):
-    // Starts at 1000ms and drops by 20ms per point (minimum 450ms)
-    const lifetime = Math.max(450, 1000 - score * 20);
+    // Difficulty Settings evaluated at the exact moment of spawn
+    const settings = getDifficultySettings(score);
+    const lifetime = settings.visibleDuration;
     
     // Auto-remove after calculated lifetime (Missed)
-    setTimeout(() => {
+    const lifetimeTimeout = setTimeout(() => {
         if (circle.parentElement && gameActive) {
-            const currentGen = targetGeneration;
-            const wasTarget = (circle.dataset.isTargetAtSpawn === "true");
-            const circleGen = parseInt(circle.dataset.generation, 10);
+            const circleColor = circle.dataset.color;
+            const currentTargetColor = currentTarget.name;
             
-            // End game ONLY if the circle matched target at spawn, and target hasn't changed since
-            if (wasTarget && circleGen === currentGen) {
+            console.log(`[EXPIRY CHECK] Circle color: ${circleColor}, Current target color: ${currentTargetColor}`);
+            
+            if (circleColor === currentTargetColor) {
                 endGame('Missed the target color!');
             } else {
-                // Animate fadeOut for non-target circles that naturally expire
+                // Non-target circle expired naturally -> remove with transition, no penalty
                 circle.style.pointerEvents = 'none';
                 circle.style.animation = 'fadeOut 0.2s ease-in forwards';
-                setTimeout(() => {
-                    if (circle.parentElement) {
-                        circle.remove();
-                    }
+                const removeTimeout = setTimeout(() => {
+                    removeCircle(circle);
                 }, 200);
+                circle.removeTimeout = removeTimeout;
             }
         }
     }, lifetime);
+    
+    circle.lifetimeTimeout = lifetimeTimeout;
 }
 
-function handleCircleClick(clickedColorName, element, spawnTime) {
+function handleCircleClick(circle) {
     if (!gameActive) return;
     
-    if (clickedColorName === currentTarget.name) {
+    const clickedColor = circle.dataset.color;
+    const currentTargetColor = currentTarget.name;
+    
+    console.log(`[TAP CHECK] Circle color: ${clickedColor}, Current target color: ${currentTargetColor}`);
+    
+    if (clickedColor === currentTargetColor) {
         // Correct Hit!
+        const spawnTime = parseInt(circle.dataset.spawnTime, 10);
         const tapTime = Date.now();
         const reaction = tapTime - spawnTime;
         totalReactionTime += reaction;
@@ -204,19 +217,40 @@ function handleCircleClick(clickedColorName, element, spawnTime) {
         score++;
         updateScore(score);
         
-        // Play disappear animation, disable pointer events to prevent duplicate clicks
-        element.style.pointerEvents = 'none';
-        element.style.animation = 'fadeOut 0.2s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards';
-        setTimeout(() => {
-            if (element.parentElement) {
-                element.remove();
-            }
+        // Remove click listener and play disappear animation immediately
+        circle.style.pointerEvents = 'none';
+        circle.style.animation = 'fadeOut 0.2s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards';
+        
+        // Clear its expiration timeout immediately
+        if (circle.lifetimeTimeout) {
+            clearTimeout(circle.lifetimeTimeout);
+            circle.lifetimeTimeout = null;
+        }
+        
+        const removeTimeout = setTimeout(() => {
+            removeCircle(circle);
         }, 200);
+        circle.removeTimeout = removeTimeout;
         
         pickNewTarget();
     } else {
         // Wrong Color!
         endGame('Wrong color tapped!');
+    }
+}
+
+// Clean up circle and its scheduled timeouts
+function removeCircle(circleElement) {
+    if (circleElement.lifetimeTimeout) {
+        clearTimeout(circleElement.lifetimeTimeout);
+        circleElement.lifetimeTimeout = null;
+    }
+    if (circleElement.removeTimeout) {
+        clearTimeout(circleElement.removeTimeout);
+        circleElement.removeTimeout = null;
+    }
+    if (circleElement.parentElement) {
+        circleElement.remove();
     }
 }
 
@@ -229,8 +263,12 @@ function endGame(reason) {
     if (spawnTimeout) clearTimeout(spawnTimeout);
     if (timerInterval) clearInterval(timerInterval);
     
-    // Clear the board
-    if (gameArea) gameArea.innerHTML = '';
+    // Clear all circles and their timeouts from the board
+    if (gameArea) {
+        const activeCircles = gameArea.querySelectorAll('.circle');
+        activeCircles.forEach(circle => removeCircle(circle));
+        gameArea.innerHTML = '';
+    }
     
     const survivalTime = ((Date.now() - startTime) / 1000).toFixed(2);
     const avgReactionTime = correctTaps > 0 ? (totalReactionTime / correctTaps / 1000).toFixed(3) : 'N/A';
