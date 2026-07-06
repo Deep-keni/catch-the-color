@@ -179,8 +179,6 @@ function spawnCircle() {
             const circleColor = circle.dataset.color;
             const currentTargetColor = currentTarget.name;
             
-            console.log(`[EXPIRY CHECK] Circle color: ${circleColor}, Current target color: ${currentTargetColor}`);
-            
             if (circleColor === currentTargetColor) {
                 endGame('Missed the target color!');
             } else {
@@ -203,8 +201,6 @@ function handleCircleClick(circle) {
     
     const clickedColor = circle.dataset.color;
     const currentTargetColor = currentTarget.name;
-    
-    console.log(`[TAP CHECK] Circle color: ${clickedColor}, Current target color: ${currentTargetColor}`);
     
     if (clickedColor === currentTargetColor) {
         // Correct Hit!
